@@ -1,5 +1,5 @@
 // Bump VERSION whenever you change index.html so phones pick up the new copy.
-const VERSION = 'dictation-v1';
+const VERSION = 'dictation-v2';
 const FILES = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
