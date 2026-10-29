@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<!-- interactive-widget=resizes-content: page shrinks when the keyboard opens, so nothing hides behind Gboard -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#1f6feb">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
@@ -11,12 +12,12 @@
   :root {
     --bg: #f4f5f8; --card: #ffffff; --text: #1d1f24; --muted: #6b7180;
     --border: #d4d8e0; --accent: #1f6feb; --accent-press: #1857b8;
-    --ok: #1a8f4c; --warn: #c27c0e; --err: #c93a3a;
+    --ok: #1a8f4c; --warn: #c27c0e; --err: #c93a3a; --chip: #e8edf7;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #121418; --card: #1c1f25; --text: #e7e9ee; --muted: #9399a6;
-      --border: #333843; --accent: #3b82f6; --accent-press: #2563eb;
+      --border: #333843; --accent: #3b82f6; --accent-press: #2563eb; --chip: #252b36;
     }
   }
   * { box-sizing: border-box; }
@@ -25,8 +26,8 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text);
     display: flex; flex-direction: column;
-    height: 100dvh; padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
-    gap: 10px;
+    height: 100dvh; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    gap: 8px;
   }
   header { display: flex; align-items: center; gap: 10px; }
   h1 { font-size: 1.05rem; margin: 0; flex: 1; }
@@ -38,10 +39,23 @@
     font: inherit; border: none; border-radius: 10px; cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
-  #connectBtn {
-    padding: 8px 12px; font-size: .9rem; font-weight: 600;
-    background: var(--card); color: var(--accent); border: 1px solid var(--border);
+  .ghost { background: var(--card); color: var(--muted); border: 1px solid var(--border); font-weight: 600; }
+  #connectBtn { padding: 8px 12px; font-size: .9rem; color: var(--accent); }
+  .row { display: flex; gap: 8px; }
+  .row .ghost { padding: 14px 14px; }
+  #historyBtn.active { color: var(--accent); border-color: var(--accent); }
+  #sendBtn {
+    flex: 1; padding: 14px; font-size: 1.1rem; font-weight: 700;
+    background: var(--accent); color: #fff;
   }
+  #sendBtn:active { background: var(--accent-press); }
+  #sendBtn:disabled { opacity: .45; }
+  .opts { display: flex; align-items: center; justify-content: space-between; font-size: .85rem; color: var(--muted); }
+  .opts label { display: flex; align-items: center; gap: 6px; }
+  #msg { min-height: 1.1em; }
+  #msg.err { color: var(--err); }
+  .pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .hidden { display: none !important; }
   textarea {
     flex: 1; width: 100%; resize: none;
     font: inherit; font-size: 1.1rem; line-height: 1.45;
@@ -49,56 +63,67 @@
     border: 1px solid var(--border); background: var(--card); color: var(--text);
   }
   textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .opts { display: flex; align-items: center; justify-content: space-between; font-size: .9rem; color: var(--muted); }
-  .opts label { display: flex; align-items: center; gap: 6px; }
-  .row { display: flex; gap: 10px; }
-  #clearBtn {
-    padding: 16px 18px; font-weight: 600;
-    background: var(--card); color: var(--muted); border: 1px solid var(--border);
+  #historyPane { overflow-y: auto; gap: 8px; }
+  #histList { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+  .hist-head { display: flex; justify-content: space-between; align-items: center; font-size: .85rem; color: var(--muted); }
+  .hist-head button { padding: 6px 10px; font-size: .8rem; }
+  .item {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
   }
-  #sendBtn {
-    flex: 1; padding: 16px; font-size: 1.15rem; font-weight: 700;
-    background: var(--accent); color: #fff;
-  }
-  #sendBtn:active { background: var(--accent-press); }
-  #sendBtn:disabled { opacity: .45; }
-  #msg { font-size: .85rem; min-height: 1.2em; color: var(--muted); }
-  #msg.err { color: var(--err); }
+  .item .meta { font-size: .75rem; color: var(--muted); }
+  .item .body { white-space: pre-wrap; word-break: break-word; font-size: .95rem; line-height: 1.4; }
+  .item .acts { display: flex; gap: 8px; }
+  .item .acts button { padding: 6px 12px; font-size: .85rem; background: var(--chip); color: var(--text); }
+  .empty { color: var(--muted); text-align: center; padding: 24px 0; font-size: .9rem; }
 </style>
 </head>
 <body>
   <header>
     <h1>Dictation Bridge</h1>
     <div class="status"><span id="dot" class="dot"></span><span id="statusText">Disconnected</span></div>
-    <button id="connectBtn">Connect</button>
+    <button id="connectBtn" class="ghost">Connect</button>
   </header>
 
-  <textarea id="txt"
-    autocapitalize="sentences" autocorrect="on" spellcheck="true"
-    enterkeyhint="enter"
-    placeholder="Type or tap the mic and speak. Enter = soft new line (Shift+Enter on the PC)."></textarea>
+  <div class="row">
+    <button id="clearBtn" class="ghost">Clear</button>
+    <button id="sendBtn" disabled>Send to PC</button>
+    <button id="historyBtn" class="ghost">History</button>
+  </div>
 
   <div class="opts">
     <label><input type="checkbox" id="autoSpace" checked> Add trailing space</label>
+    <span id="msg"></span>
     <span id="count">0 chars</span>
   </div>
 
-  <div class="row">
-    <button id="clearBtn">Clear</button>
-    <button id="sendBtn" disabled>Send to PC</button>
+  <div id="editPane" class="pane">
+    <textarea id="txt"
+      autocapitalize="sentences" autocorrect="on" spellcheck="true"
+      enterkeyhint="enter"
+      placeholder="Type or tap the mic and speak. Enter = soft new line (Shift+Enter on the PC)."></textarea>
   </div>
-  <div id="msg"></div>
+
+  <div id="historyPane" class="pane hidden">
+    <div class="hist-head">
+      <span id="histCount">This session</span>
+      <button id="clearHistBtn" class="ghost">Clear history</button>
+    </div>
+    <div id="histList"></div>
+  </div>
 
 <script>
 // Nordic UART Service (matches the ESP32 sketch)
 const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const RX_UUID      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // phone -> ESP
 const CHUNK = 20;            // safe BLE payload size at the default MTU
+const HIST_KEY = 'dictationHistory';
 
 const $ = id => document.getElementById(id);
 const txt = $('txt'), sendBtn = $('sendBtn'), connectBtn = $('connectBtn');
 const dot = $('dot'), statusText = $('statusText'), msg = $('msg');
 const autoSpace = $('autoSpace');
+const historyBtn = $('historyBtn'), editPane = $('editPane'), historyPane = $('historyPane');
 
 let device = null, rxChar = null, sending = false, manualDisconnect = false;
 
@@ -107,6 +132,71 @@ try { autoSpace.checked = localStorage.getItem('autoSpace') !== '0'; } catch (e)
 autoSpace.addEventListener('change', () => {
   try { localStorage.setItem('autoSpace', autoSpace.checked ? '1' : '0'); } catch (e) {}
 });
+
+// ---- session history (sessionStorage: survives reload, gone when the tab/app closes) ----
+let history = [];
+try { history = JSON.parse(sessionStorage.getItem(HIST_KEY) || '[]'); } catch (e) { history = []; }
+function saveHistory() {
+  try { sessionStorage.setItem(HIST_KEY, JSON.stringify(history)); } catch (e) {}
+}
+function addHistory(text) {
+  history.unshift({ t: Date.now(), text });
+  saveHistory();
+  renderHistory();
+}
+function fmtTime(ms) {
+  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+function renderHistory() {
+  const list = $('histList');
+  list.innerHTML = '';
+  $('histCount').textContent = history.length ? `${history.length} sent this session` : 'This session';
+  historyBtn.textContent = history.length ? `History (${history.length})` : 'History';
+  if (!history.length) {
+    list.innerHTML = '<div class="empty">Nothing sent yet.</div>';
+    return;
+  }
+  history.forEach(h => {
+    const item = document.createElement('div');
+    item.className = 'item';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `${fmtTime(h.t)} · ${h.text.length} chars`;
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = h.text;
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    const reuse = document.createElement('button');
+    reuse.textContent = 'Reuse';
+    reuse.onclick = () => { txt.value = h.text; onTextChange(); showEditor(); };
+    const copy = document.createElement('button');
+    copy.textContent = 'Copy';
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(h.text); copy.textContent = 'Copied'; }
+      catch (e) { copy.textContent = 'Copy failed'; }
+      setTimeout(() => copy.textContent = 'Copy', 1500);
+    };
+    acts.append(reuse, copy);
+    item.append(meta, body, acts);
+    list.appendChild(item);
+  });
+}
+function showEditor() {
+  historyPane.classList.add('hidden');
+  editPane.classList.remove('hidden');
+  historyBtn.classList.remove('active');
+  txt.focus();
+}
+function showHistory() {
+  editPane.classList.add('hidden');
+  historyPane.classList.remove('hidden');
+  historyBtn.classList.add('active');
+  txt.blur();                       // drop the keyboard so the list has room
+}
+historyBtn.addEventListener('click', () =>
+  historyPane.classList.contains('hidden') ? showHistory() : showEditor());
+$('clearHistBtn').addEventListener('click', () => { history = []; saveHistory(); renderHistory(); });
 
 // ---- UI helpers ----
 function setStatus(state, text) {
@@ -119,22 +209,23 @@ function say(text, isErr) { msg.textContent = text || ''; msg.className = isErr 
 function updateSendEnabled() {
   sendBtn.disabled = !rxChar || sending || txt.value.trim() === '';
 }
-txt.addEventListener('input', () => {
+function onTextChange() {
   $('count').textContent = txt.value.length + ' chars';
   updateSendEnabled();
-});
+}
+txt.addEventListener('input', onTextChange);
 
 // ---- text cleanup: make it plain ASCII the ESP can type ----
 function normalize(s) {
   s = s
-    .replace(/\r\n?/g, '\n')                       // CRLF/CR -> LF
-    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'") // smart single quotes
-    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"') // smart double quotes
-    .replace(/[\u2013\u2014\u2212]/g, '-')          // en/em dash, minus
-    .replace(/\u2026/g, '...')                      // ellipsis
-    .replace(/[\u00A0\u2007\u202F]/g, ' ')          // non-breaking spaces
-    .replace(/[^\x09\x0A\x20-\x7E]/g, '');          // drop anything else non-ASCII (emoji etc.)
-  s = s.replace(/\n+$/, '');                        // never end with a newline
+    .replace(/\r\n?/g, '\n')                           // CRLF/CR -> LF
+    .replace(/[‘’‚‛′]/g, "'") // smart single quotes
+    .replace(/[“”„‟″]/g, '"') // smart double quotes
+    .replace(/[–—−]/g, '-')             // en/em dash, minus
+    .replace(/…/g, '...')                         // ellipsis
+    .replace(/[   ]/g, ' ')             // non-breaking spaces
+    .replace(/[^\x09\x0A\x20-\x7E]/g, '');             // drop anything else non-ASCII (emoji etc.)
+  s = s.replace(/\n+$/, '');                           // never end with a newline
   if (autoSpace.checked && s.length && !/\s$/.test(s)) s += ' ';
   return s;
 }
@@ -186,14 +277,14 @@ connectBtn.addEventListener('click', async () => {
     dev.removeEventListener('gattserverdisconnected', onDisconnected);
     dev.addEventListener('gattserverdisconnected', onDisconnected);
     await connectTo(dev);
-    txt.focus();
+    showEditor();
   } catch (e) {
     setStatus('', 'Disconnected');
     if (e.name !== 'NotFoundError') say(e.message, true); // NotFoundError = user cancelled picker
   }
 });
 
-// Try to silently reconnect to a previously approved device (works only if Chrome supports getDevices)
+// Try to silently reconnect to a previously approved device (only if Chrome supports getDevices)
 async function tryAutoReconnect() {
   if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
   try {
@@ -208,7 +299,8 @@ async function tryAutoReconnect() {
 // ---- Send ----
 async function send() {
   if (!rxChar || sending) return;
-  const text = normalize(txt.value);
+  const original = txt.value;
+  const text = normalize(original);
   if (!text.trim()) return;
 
   sending = true; updateSendEnabled();
@@ -217,20 +309,21 @@ async function send() {
     for (let i = 0; i < bytes.length; i += CHUNK) {
       await rxChar.writeValueWithResponse(bytes.slice(i, i + CHUNK));
     }
+    addHistory(original.replace(/\n+$/, ''));   // log what you wrote (before ASCII cleanup)
     txt.value = '';
-    $('count').textContent = '0 chars';
+    onTextChange();
     say('Sent ' + bytes.length + ' chars');
   } catch (e) {
-    say('Send failed — text kept. ' + e.message, true);
+    say('Send failed — text kept.', true);
   } finally {
     sending = false; updateSendEnabled();
-    txt.focus();
+    if (historyPane.classList.contains('hidden')) txt.focus();
   }
 }
 sendBtn.addEventListener('click', send);
 
 $('clearBtn').addEventListener('click', () => {
-  txt.value = ''; $('count').textContent = '0 chars'; say(''); updateSendEnabled(); txt.focus();
+  txt.value = ''; onTextChange(); say(''); showEditor();
 });
 
 // ---- offline support ----
@@ -238,6 +331,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+renderHistory();
 tryAutoReconnect();
 </script>
 </body>
