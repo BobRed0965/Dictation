@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f6feb">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<title>Dictation Bridge</title>
+<style>
+  :root {
+    --bg: #f4f5f8; --card: #ffffff; --text: #1d1f24; --muted: #6b7180;
+    --border: #d4d8e0; --accent: #1f6feb; --accent-press: #1857b8;
+    --ok: #1a8f4c; --warn: #c27c0e; --err: #c93a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121418; --card: #1c1f25; --text: #e7e9ee; --muted: #9399a6;
+      --border: #333843; --accent: #3b82f6; --accent-press: #2563eb;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column;
+    height: 100dvh; padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+    gap: 10px;
+  }
+  header { display: flex; align-items: center; gap: 10px; }
+  h1 { font-size: 1.05rem; margin: 0; flex: 1; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); }
+  .dot.ok { background: var(--ok); }
+  .dot.busy { background: var(--warn); }
+  button {
+    font: inherit; border: none; border-radius: 10px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #connectBtn {
+    padding: 8px 12px; font-size: .9rem; font-weight: 600;
+    background: var(--card); color: var(--accent); border: 1px solid var(--border);
+  }
+  textarea {
+    flex: 1; width: 100%; resize: none;
+    font: inherit; font-size: 1.1rem; line-height: 1.45;
+    padding: 12px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--card); color: var(--text);
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .opts { display: flex; align-items: center; justify-content: space-between; font-size: .9rem; color: var(--muted); }
+  .opts label { display: flex; align-items: center; gap: 6px; }
+  .row { display: flex; gap: 10px; }
+  #clearBtn {
+    padding: 16px 18px; font-weight: 600;
+    background: var(--card); color: var(--muted); border: 1px solid var(--border);
+  }
+  #sendBtn {
+    flex: 1; padding: 16px; font-size: 1.15rem; font-weight: 700;
+    background: var(--accent); color: #fff;
+  }
+  #sendBtn:active { background: var(--accent-press); }
+  #sendBtn:disabled { opacity: .45; }
+  #msg { font-size: .85rem; min-height: 1.2em; color: var(--muted); }
+  #msg.err { color: var(--err); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Dictation Bridge</h1>
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">Disconnected</span></div>
+    <button id="connectBtn">Connect</button>
+  </header>
+
+  <textarea id="txt"
+    autocapitalize="sentences" autocorrect="on" spellcheck="true"
+    enterkeyhint="enter"
+    placeholder="Type or tap the mic and speak. Enter = soft new line (Shift+Enter on the PC)."></textarea>
+
+  <div class="opts">
+    <label><input type="checkbox" id="autoSpace" checked> Add trailing space</label>
+    <span id="count">0 chars</span>
+  </div>
+
+  <div class="row">
+    <button id="clearBtn">Clear</button>
+    <button id="sendBtn" disabled>Send to PC</button>
+  </div>
+  <div id="msg"></div>
+
+<script>
+// Nordic UART Service (matches the ESP32 sketch)
+const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const RX_UUID      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // phone -> ESP
+const CHUNK = 20;            // safe BLE payload size at the default MTU
+
+const $ = id => document.getElementById(id);
+const txt = $('txt'), sendBtn = $('sendBtn'), connectBtn = $('connectBtn');
+const dot = $('dot'), statusText = $('statusText'), msg = $('msg');
+const autoSpace = $('autoSpace');
+
+let device = null, rxChar = null, sending = false, manualDisconnect = false;
+
+// ---- settings ----
+try { autoSpace.checked = localStorage.getItem('autoSpace') !== '0'; } catch (e) {}
+autoSpace.addEventListener('change', () => {
+  try { localStorage.setItem('autoSpace', autoSpace.checked ? '1' : '0'); } catch (e) {}
+});
+
+// ---- UI helpers ----
+function setStatus(state, text) {
+  dot.className = 'dot' + (state === 'ok' ? ' ok' : state === 'busy' ? ' busy' : '');
+  statusText.textContent = text;
+  connectBtn.textContent = state === 'ok' ? 'Disconnect' : 'Connect';
+  updateSendEnabled();
+}
+function say(text, isErr) { msg.textContent = text || ''; msg.className = isErr ? 'err' : ''; }
+function updateSendEnabled() {
+  sendBtn.disabled = !rxChar || sending || txt.value.trim() === '';
+}
+txt.addEventListener('input', () => {
+  $('count').textContent = txt.value.length + ' chars';
+  updateSendEnabled();
+});
+
+// ---- text cleanup: make it plain ASCII the ESP can type ----
+function normalize(s) {
+  s = s
+    .replace(/\r\n?/g, '\n')                       // CRLF/CR -> LF
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'") // smart single quotes
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"') // smart double quotes
+    .replace(/[\u2013\u2014\u2212]/g, '-')          // en/em dash, minus
+    .replace(/\u2026/g, '...')                      // ellipsis
+    .replace(/[\u00A0\u2007\u202F]/g, ' ')          // non-breaking spaces
+    .replace(/[^\x09\x0A\x20-\x7E]/g, '');          // drop anything else non-ASCII (emoji etc.)
+  s = s.replace(/\n+$/, '');                        // never end with a newline
+  if (autoSpace.checked && s.length && !/\s$/.test(s)) s += ' ';
+  return s;
+}
+
+// ---- Bluetooth ----
+async function connectTo(dev) {
+  setStatus('busy', 'Connecting…');
+  const server = await dev.gatt.connect();
+  const svc = await server.getPrimaryService(SERVICE_UUID);
+  rxChar = await svc.getCharacteristic(RX_UUID);
+  device = dev;
+  setStatus('ok', 'Connected');
+  say('');
+}
+
+function onDisconnected() {
+  rxChar = null;
+  setStatus('', 'Disconnected');
+  if (!manualDisconnect && device) {
+    say('Connection lost — retrying…');
+    retryConnect(device, 5);
+  }
+}
+
+async function retryConnect(dev, tries) {
+  for (let i = 0; i < tries; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    try { await connectTo(dev); return; } catch (e) {}
+  }
+  say('Could not reconnect. Tap Connect.', true);
+}
+
+connectBtn.addEventListener('click', async () => {
+  if (rxChar && device) {               // acting as Disconnect
+    manualDisconnect = true;
+    device.gatt.disconnect();
+    return;
+  }
+  if (!navigator.bluetooth) {
+    say('Web Bluetooth not available. Use Chrome on Android, over https.', true);
+    return;
+  }
+  manualDisconnect = false;
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE_UUID] }, { name: 'Dictation Bridge' }],
+      optionalServices: [SERVICE_UUID]
+    });
+    dev.removeEventListener('gattserverdisconnected', onDisconnected);
+    dev.addEventListener('gattserverdisconnected', onDisconnected);
+    await connectTo(dev);
+    txt.focus();
+  } catch (e) {
+    setStatus('', 'Disconnected');
+    if (e.name !== 'NotFoundError') say(e.message, true); // NotFoundError = user cancelled picker
+  }
+});
+
+// Try to silently reconnect to a previously approved device (works only if Chrome supports getDevices)
+async function tryAutoReconnect() {
+  if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+  try {
+    const devs = await navigator.bluetooth.getDevices();
+    const dev = devs.find(d => d.name === 'Dictation Bridge') || devs[0];
+    if (!dev) return;
+    dev.addEventListener('gattserverdisconnected', onDisconnected);
+    await connectTo(dev);
+  } catch (e) { setStatus('', 'Disconnected'); }
+}
+
+// ---- Send ----
+async function send() {
+  if (!rxChar || sending) return;
+  const text = normalize(txt.value);
+  if (!text.trim()) return;
+
+  sending = true; updateSendEnabled();
+  const bytes = new TextEncoder().encode(text);
+  try {
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      await rxChar.writeValueWithResponse(bytes.slice(i, i + CHUNK));
+    }
+    txt.value = '';
+    $('count').textContent = '0 chars';
+    say('Sent ' + bytes.length + ' chars');
+  } catch (e) {
+    say('Send failed — text kept. ' + e.message, true);
+  } finally {
+    sending = false; updateSendEnabled();
+    txt.focus();
+  }
+}
+sendBtn.addEventListener('click', send);
+
+$('clearBtn').addEventListener('click', () => {
+  txt.value = ''; $('count').textContent = '0 chars'; say(''); updateSendEnabled(); txt.focus();
+});
+
+// ---- offline support ----
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+tryAutoReconnect();
+</script>
+</body>
+</html>
